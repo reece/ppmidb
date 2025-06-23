@@ -3,26 +3,33 @@
 """infer schema from provided csv file"""
 
 import logging
+from pathlib import Path
 import sys
 from dataclasses import dataclass, field
 import re
 from typing import Any, Optional, Tuple, List, Union
 
 import polars as pl
+import click
 
 _logger = logging.getLogger()
+
 
 @dataclass
 class ColumnSchema:
     """
     Represents the inferred schema for a single column.
     """
+
     csv_name: str  # Original name from CSV
     sql_name: str  # Legal SQL column name (lowercased, special chars replaced)
     polars_type: pl.DataType
     is_nullable: bool
-    value_range: Optional[Tuple[Union[int, float], Union[int, float]]] = None  # (min_value, max_value) for numeric types
-    sql_type: str = "" # Inferred optimal SQL type (will be populated after creation)
+    value_range: Optional[Tuple[Union[int, float], Union[int, float]]] = (
+        None  # (min_value, max_value) for numeric types
+    )
+    sql_type: str = ""  # Inferred optimal SQL type (will be populated after creation)
+
 
 def _clean_for_sql_name(csv_name: str) -> str:
     """
@@ -35,24 +42,22 @@ def _clean_for_sql_name(csv_name: str) -> str:
     # Convert to lowercase
     sql_name = csv_name.lower()
     # Replace non-alphanumeric (and not underscore) characters with underscore
-    sql_name = re.sub(r'[^a-z0-9_]+', '_', sql_name)
+    sql_name = re.sub(r"[^a-z0-9_]+", "_", sql_name)
     # Replace multiple consecutive underscores with a single underscore
-    sql_name = re.sub(r'_+', '_', sql_name)
+    sql_name = re.sub(r"_+", "_", sql_name)
     # Remove leading/trailing underscores
-    sql_name = sql_name.strip('_')
+    sql_name = sql_name.strip("_")
     # Ensure it's not empty after cleaning; if so, provide a default
     if not sql_name:
-        sql_name = "column" # Fallback if name becomes empty
+        sql_name = "column"  # Fallback if name becomes empty
     return sql_name
 
 
 def get_optimal_sql_type(column_schema: ColumnSchema) -> str:
     """
     Computes the optimal PostgreSQL SQL data type string from a ColumnSchema record.
-
     Args:
         column_schema (ColumnSchema): A dataclass instance representing the column's inferred schema.
-
     Returns:
         str: The PostgreSQL SQL data type string (e.g., "INTEGER NOT NULL", "TEXT NULL").
     """
@@ -83,7 +88,7 @@ def get_optimal_sql_type(column_schema: ColumnSchema) -> str:
                 else:
                     sql_type_base = "BIGINT"
             else:
-                 sql_type_base = "BIGINT"
+                sql_type_base = "BIGINT"
         else:
             sql_type_base = "BIGINT"
     elif base_polars_type == pl.UInt8:
@@ -106,21 +111,24 @@ def get_optimal_sql_type(column_schema: ColumnSchema) -> str:
     elif base_polars_type == pl.Date:
         sql_type_base = "DATE"
     elif base_polars_type == pl.Datetime:
-        sql_type_base = "TIMESTAMP WITHOUT TIME ZONE" # Default for Polars datetime without explicit tz
+        sql_type_base = "TIMESTAMP WITHOUT TIME ZONE"  # Default for Polars datetime without explicit tz
     elif base_polars_type == pl.Time:
         sql_type_base = "TIME"
     elif base_polars_type == pl.Decimal:
-        # If precision/scale are available, use them. Otherwise, a generic NUMERIC.
-        if hasattr(polars_type, 'precision') and hasattr(polars_type, 'scale'):
-            precision = polars_type.precision if polars_type.precision is not None else 38
+        # If precision/scale are available, use them.
+        # Otherwise, a generic NUMERIC.
+        if hasattr(polars_type, "precision") and hasattr(polars_type, "scale"):
+            precision = (
+                polars_type.precision if polars_type.precision is not None else 38
+            )
             scale = polars_type.scale if polars_type.scale is not None else 10
             sql_type_base = f"NUMERIC({precision}, {scale})"
         else:
             sql_type_base = "NUMERIC"
     elif base_polars_type == pl.List:
-        sql_type_base = "JSONB" # Flexible for lists of varying types/structures
+        sql_type_base = "JSONB"  # Flexible for lists of varying types/structures
     elif base_polars_type == pl.Struct:
-        sql_type_base = "JSONB" # Flexible for structured data
+        sql_type_base = "JSONB"  # Flexible for structured data
 
     # Add nullability constraint
     null_constraint = "NULL" if is_nullable else "NOT NULL"
@@ -128,29 +136,11 @@ def get_optimal_sql_type(column_schema: ColumnSchema) -> str:
     return f"{sql_type_base} {null_constraint}"
 
 
-def read_csv_and_infer_schema(
-    file_path: str,
-    *,
-    has_header: bool = True,
-    separator: str = ",",
-    infer_schema_length: Optional[int] = 100,
-    **kwargs: Any
-) -> List[ColumnSchema]:
+def infer_schema(df: pl.DataFrame) -> List[ColumnSchema]:
     """
-    Reads a CSV file into a Polars DataFrame and infers its schema,
+    Infers schema from polars dataframe
     including CSV name, SQL name, Polars type, nullability, range, and optimal SQL type.
     """
-    try:
-        df = pl.read_csv(
-            file_path,
-            has_header=has_header,
-            separator=separator,
-            infer_schema_length=infer_schema_length,
-            **kwargs
-        )
-    except Exception as e:
-        print(f"Error reading CSV file '{file_path}': {e}")
-        return []
 
     inferred_schema: List[ColumnSchema] = []
 
@@ -170,10 +160,10 @@ def read_csv_and_infer_schema(
         # We'll populate sql_type in the next step
         temp_col_schema = ColumnSchema(
             csv_name=csv_col_name,
-            sql_name=_clean_for_sql_name(csv_col_name), # Populate sql_name here
+            sql_name=_clean_for_sql_name(csv_col_name),  # Populate sql_name here
             polars_type=polars_dtype,
             is_nullable=is_nullable,
-            value_range=value_range
+            value_range=value_range,
         )
 
         # Now, infer the optimal SQL type using the helper function
@@ -184,22 +174,27 @@ def read_csv_and_infer_schema(
     return inferred_schema
 
 
-def print_schema_as_table(schema_records: List[ColumnSchema]) -> str:
+def schema_as_table(schema_records: List[ColumnSchema]) -> str:
     """
     Prints a list of ColumnSchema records as a formatted text table.
     Includes CSV Name, SQL Name, Polars Type, Nullable, Value Range, and Optimal SQL Type.
-
     Args:
         schema_records (List[ColumnSchema]): A list of dataclass instances
                                              representing the inferred schema.
     """
     if not schema_records:
-        print("No schema records to display.")
-        return
+        return "No schema records to display."
 
     table_str = ""
 
-    headers = ["CSV Name", "SQL Name", "Polars Type", "Nullable", "Value Range", "Optimal SQL Type"]
+    headers = [
+        "CSV Name",
+        "SQL Name",
+        "Polars Type",
+        "Nullable",
+        "Value Range",
+        "Optimal SQL Type",
+    ]
 
     # Calculate column widths dynamically
     col_widths = {header: len(header) for header in headers}
@@ -207,14 +202,20 @@ def print_schema_as_table(schema_records: List[ColumnSchema]) -> str:
     for col_schema in schema_records:
         polars_type_str = str(col_schema.polars_type)
         is_nullable_str = "Yes" if col_schema.is_nullable else "No"
-        value_range_str = f"({col_schema.value_range[0]} to {col_schema.value_range[1]})" if col_schema.value_range else "N/A"
+        value_range_str = (
+            f"({col_schema.value_range[0]} to {col_schema.value_range[1]})"
+            if col_schema.value_range
+            else "N/A"
+        )
 
         col_widths["CSV Name"] = max(col_widths["CSV Name"], len(col_schema.csv_name))
         col_widths["SQL Name"] = max(col_widths["SQL Name"], len(col_schema.sql_name))
         col_widths["Polars Type"] = max(col_widths["Polars Type"], len(polars_type_str))
         col_widths["Nullable"] = max(col_widths["Nullable"], len(is_nullable_str))
         col_widths["Value Range"] = max(col_widths["Value Range"], len(value_range_str))
-        col_widths["Optimal SQL Type"] = max(col_widths["Optimal SQL Type"], len(col_schema.sql_type))
+        col_widths["Optimal SQL Type"] = max(
+            col_widths["Optimal SQL Type"], len(col_schema.sql_type)
+        )
 
     # Print header
     header_line = (
@@ -232,7 +233,11 @@ def print_schema_as_table(schema_records: List[ColumnSchema]) -> str:
     for col_schema in schema_records:
         polars_type_str = str(col_schema.polars_type)
         is_nullable_str = "Yes" if col_schema.is_nullable else "No"
-        value_range_str = f"({col_schema.value_range[0]} to {col_schema.value_range[1]})" if col_schema.value_range else "N/A"
+        value_range_str = (
+            f"({col_schema.value_range[0]} to {col_schema.value_range[1]})"
+            if col_schema.value_range
+            else "N/A"
+        )
 
         row_line = (
             f"{col_schema.csv_name:<{col_widths['CSV Name']}} | "
@@ -249,16 +254,15 @@ def print_schema_as_table(schema_records: List[ColumnSchema]) -> str:
 def generate_sql_create_table_ddl(
     schema_records: List[ColumnSchema],
     table_name: str,
-    primary_key_sql_name: Optional[str] = None
+    primary_key_sql_name: Optional[str] = None,
 ) -> str:
     """
     Generates a PostgreSQL CREATE TABLE DDL statement from a list of ColumnSchema records.
-
     Args:
         schema_records (List[ColumnSchema]): A list of dataclass instances representing the inferred schema.
-        table_name (str): The desired name for the SQL table.
+    table_name (str): The desired name for the SQL table.
         primary_key_sql_name (Optional[str]): The `sql_name` of the column to set as PRIMARY KEY.
-                                             If None, no primary key constraint is added.
+    If None, no primary key constraint is added.
 
     Returns:
         str: The complete PostgreSQL CREATE TABLE DDL statement.
@@ -273,26 +277,51 @@ def generate_sql_create_table_ddl(
     for col_schema in schema_records:
         # Use double quotes for column names to handle potential issues with keywords
         # or characters not fully cleaned (though _clean_for_sql_name helps here).
-        column_definitions.append(f"    \"{col_schema.sql_name}\" {col_schema.sql_type}")
+        column_definitions.append(f'    "{col_schema.sql_name}" {col_schema.sql_type}')
 
     if primary_key_sql_name:
         if primary_key_sql_name in existing_sql_names:
-            column_definitions.append(f"    PRIMARY KEY (\"{primary_key_sql_name}\")")
+            column_definitions.append(f'    PRIMARY KEY ("{primary_key_sql_name}")')
         else:
-            print(f"Warning: Primary key column '{primary_key_sql_name}' not found in inferred SQL names.")
+            _logger.warning(
+                f"Primary key column '{primary_key_sql_name}' not found in inferred SQL names."
+            )
 
-    ddl_statement = f"CREATE TABLE \"{table_name}\" (\n"
+    ddl_statement = f'CREATE TABLE "{table_name}" (\n'
     ddl_statement += ",\n".join(column_definitions)
     ddl_statement += "\n);"
     return ddl_statement
 
 
-
-if __name__ == "__main__":
+@click.command()
+@click.argument(
+    "csv_path", type=click.Path(exists=True, dir_okay=False, readable=True)
+)
+@click.option(
+    "--primary-key", help="SQL column name (cleaned) to set as PRIMARY KEY."
+)
+def cli(csv_path: str, primary_key: Optional[str]):
     import coloredlogs
+
     coloredlogs.install(level="INFO")
 
-    csv_path = sys.argv[1]
-    schema = read_csv_and_infer_schema(csv_path)
-    print(print_schema_as_table(schema))
-    print(generate_sql_create_table_ddl(schema, "tablename"))
+    try:
+        df = pl.read_csv(
+            csv_path, has_header=True, separator=",", infer_schema_length=1000
+        )
+    except Exception as e:
+        _logger.error(f"Error reading CSV file '{csv_path}': {e}")
+        return []
+
+    table_name = _clean_for_sql_name(Path(csv_path).root)
+    schema = infer_schema(df)
+    print(schema_as_table(schema))
+    print(
+        generate_sql_create_table_ddl(
+            schema, table_name, primary_key_sql_name=primary_key
+        )
+    )
+
+
+if __name__ == "__main__":
+    cli()
