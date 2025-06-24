@@ -4,13 +4,18 @@
 
 import logging
 from pathlib import Path
+import re
 from typing import Optional, List
 
 import click
 import polars as pl
 
-from .infer_schema import infer_schema, ColumnSchema, _clean_for_sql_name
+from .infer_schema import infer_schema, ColumnSchema, clean_for_sql_name
 
+# columns that are always indexed
+indexed_columns = [
+    "patno"
+]
 
 _logger = logging.getLogger()
 
@@ -112,12 +117,8 @@ def generate_sql_create_table_ddl(
         return f"CREATE TABLE {table_name} (); -- No columns inferred from schema."
 
     column_definitions = []
-    # Keep track of SQL column names to ensure primary_key_sql_name exists
     existing_sql_names = {col.sql_name for col in schema_records}
-
     for col_schema in schema_records:
-        # Use double quotes for column names to handle potential issues with keywords
-        # or characters not fully cleaned (though _clean_for_sql_name helps here).
         column_definitions.append(f'    "{col_schema.sql_name}" {col_schema.sql_type}')
 
     if primary_key_sql_name:
@@ -130,7 +131,13 @@ def generate_sql_create_table_ddl(
 
     ddl_statement = f'CREATE TABLE "{table_name}" (\n'
     ddl_statement += ",\n".join(column_definitions)
-    ddl_statement += "\n);"
+    ddl_statement += "\n);\n\n"
+
+    for col_name in existing_sql_names:
+        if col_name in indexed_columns:
+            index_name = f"idx_{table_name}_{col_name}"
+            ddl_statement += f'CREATE INDEX "{index_name}" ON "{table_name}" ("{col_name}");\n'
+
     return ddl_statement
 
 
@@ -151,13 +158,19 @@ def cli(csv_path: str, primary_key: Optional[str]):
             csv_path, has_header=True, separator=",", infer_schema_length=1000
         )
     except Exception as e:
-        _logger.error(f"Error reading CSV file '{csv_path}': {e}")
-        return []
+        raise RuntimeError(f"Error reading CSV file '{csv_path}': {e}")
 
-    table_name = _clean_for_sql_name(Path(csv_path).root)
+    table_name = Path(csv_path).stem
+    table_name = clean_for_sql_name(table_name)
+    table_name = re.sub(r"_\d{8}$", r"", table_name)
     schema = infer_schema(df)
-    print(schema_as_table(schema))
+
+    table = schema_as_table(schema)
+    table = re.sub(r"^.", "-- ", table, flags=re.MULTILINE)
+
     print(
+        f"-- Schema inferred from {csv_path}\n"
+        + table + "\n" + 
         generate_sql_create_table_ddl(
             schema, table_name, primary_key_sql_name=primary_key
         )

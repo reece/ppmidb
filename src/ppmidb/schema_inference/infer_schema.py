@@ -1,8 +1,11 @@
 from dataclasses import dataclass, field
+import logging
 import re
 from typing import Optional, Tuple, List, Union
 
 import polars as pl
+
+_logger = logging.getLogger()
 
 
 @dataclass
@@ -21,7 +24,7 @@ class ColumnSchema:
     sql_type: str = ""  # Inferred optimal SQL type (will be populated after creation)
 
 
-def _clean_for_sql_name(csv_name: str) -> str:
+def clean_for_sql_name(csv_name: str) -> str:
     """
     Converts a CSV column name into a legal, lowercase SQL column name.
     - Converts to lowercase.
@@ -29,17 +32,12 @@ def _clean_for_sql_name(csv_name: str) -> str:
     - Handles multiple consecutive underscores.
     - Removes leading/trailing underscores.
     """
-    # Convert to lowercase
     sql_name = csv_name.lower()
-    # Replace non-alphanumeric (and not underscore) characters with underscore
     sql_name = re.sub(r"[^a-z0-9_]+", "_", sql_name)
-    # Replace multiple consecutive underscores with a single underscore
     sql_name = re.sub(r"_+", "_", sql_name)
-    # Remove leading/trailing underscores
     sql_name = sql_name.strip("_")
-    # Ensure it's not empty after cleaning; if so, provide a default
     if not sql_name:
-        sql_name = "column"  # Fallback if name becomes empty
+        raise ValueError(f"Unable to convert `{csv_name}` to a legal SQL name")
     return sql_name
 
 
@@ -150,7 +148,7 @@ def infer_schema(df: pl.DataFrame) -> List[ColumnSchema]:
         # We'll populate sql_type in the next step
         temp_col_schema = ColumnSchema(
             csv_name=csv_col_name,
-            sql_name=_clean_for_sql_name(csv_col_name),  # Populate sql_name here
+            sql_name=clean_for_sql_name(csv_col_name),  # Populate sql_name here
             polars_type=polars_dtype,
             is_nullable=is_nullable,
             value_range=value_range,
