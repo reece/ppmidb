@@ -21,19 +21,27 @@ _logger = logging.getLogger()
 def read_csv_content(csv_path: str) -> str:
     content = open(csv_path, encoding="cp1252").read()
     content = content.replace('\\"', '""').strip()
+    if "/Primary_Clinical_Diagnosis_" in csv_path:
+        # In Primary_Clinical_Diagnosis_20250401.csv at least, the CSV is invalid
+        content = content.replace('no tremors today. \\"",,"3",', 'no tremors today.",,"3",')
+
+    header = next(StringIO(content)).strip()
+    if len(header) == 1024:
+        _logger.warning("The header of this file is 1024 bytes and is likely truncated, resulting in invalid CSV; expect errors")
+
     return content
 
 
 @click.group()
 @click.option(
-    "--config", "-C",
+    "--config-file", "-C",
     type=click.Path(exists=True, dir_okay=False, readable=True),
     help="Path to a global configuration file.",
 )
 @click.option(
     "--verbose", "-v", is_flag=True, help="Enable verbose output for debugging."
 )
-def cli(verbose, config):
+def cli(verbose, config_file):
     """
     A versatile CLI tool with subcommands.
 
@@ -42,8 +50,7 @@ def cli(verbose, config):
     import coloredlogs
     coloredlogs.install(level="INFO")
 
-    # You could store config/verbose in ctx.obj if desired for more complex shared state
-    # click.get_current_context().obj = {'verbose': verbose, 'config': config}
+    click.get_current_context().obj = {'verbose': verbose, 'config_file': config_file}
 
 
 @cli.command("generate-schema")
