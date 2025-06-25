@@ -6,158 +6,59 @@ from io import StringIO
 import logging
 from pathlib import Path
 import re
-from typing import Optional, List
+from typing import Optional
 
 import click
 import polars as pl
 
-from .infer_schema import infer_schema, ColumnSchema, clean_for_sql_name
-
-indexed_columns = [
-    "patno"
-]
+from .infer_schema import infer_schema, clean_for_sql_name
+from .utils import generate_sql_create_table_ddl, schema_as_table
 
 _logger = logging.getLogger()
 
 
-def schema_as_table(schema_records: List[ColumnSchema]) -> str:
-    """
-    Prints a list of ColumnSchema records as a formatted text table.
-    Includes CSV Name, SQL Name, Polars Type, Nullable, Value Range, and Optimal SQL Type.
-    Args:
-        schema_records (List[ColumnSchema]): A list of dataclass instances
-                                             representing the inferred schema.
-    """
-    if not schema_records:
-        return "No schema records to display."
-
-    table_str = ""
-
-    headers = [
-        "CSV Name",
-        "SQL Name",
-        "Polars Type",
-        "Nullable",
-        "Value Range",
-        "Optimal SQL Type",
-    ]
-
-    # Calculate column widths dynamically
-    col_widths = {header: len(header) for header in headers}
-
-    for col_schema in schema_records:
-        polars_type_str = str(col_schema.polars_type)
-        is_nullable_str = "Yes" if col_schema.is_nullable else "No"
-        value_range_str = (
-            f"({col_schema.value_range[0]} to {col_schema.value_range[1]})"
-            if col_schema.value_range
-            else "N/A"
-        )
-
-        col_widths["CSV Name"] = max(col_widths["CSV Name"], len(col_schema.csv_name))
-        col_widths["SQL Name"] = max(col_widths["SQL Name"], len(col_schema.sql_name))
-        col_widths["Polars Type"] = max(col_widths["Polars Type"], len(polars_type_str))
-        col_widths["Nullable"] = max(col_widths["Nullable"], len(is_nullable_str))
-        col_widths["Value Range"] = max(col_widths["Value Range"], len(value_range_str))
-        col_widths["Optimal SQL Type"] = max(
-            col_widths["Optimal SQL Type"], len(col_schema.sql_type)
-        )
-
-    # Print header
-    header_line = (
-        f"{headers[0]:<{col_widths['CSV Name']}} | "
-        f"{headers[1]:<{col_widths['SQL Name']}} | "
-        f"{headers[2]:<{col_widths['Polars Type']}} | "
-        f"{headers[3]:<{col_widths['Nullable']}} | "
-        f"{headers[4]:<{col_widths['Value Range']}} | "
-        f"{headers[5]:<{col_widths['Optimal SQL Type']}}"
-    )
-    table_str += header_line + "\n"
-    table_str += "-" * len(header_line) + "\n"
-
-    # Print data rows
-    for col_schema in schema_records:
-        polars_type_str = str(col_schema.polars_type)
-        is_nullable_str = "Yes" if col_schema.is_nullable else "No"
-        value_range_str = (
-            f"({col_schema.value_range[0]} to {col_schema.value_range[1]})"
-            if col_schema.value_range
-            else "N/A"
-        )
-
-        row_line = (
-            f"{col_schema.csv_name:<{col_widths['CSV Name']}} | "
-            f"{col_schema.sql_name:<{col_widths['SQL Name']}} | "
-            f"{polars_type_str:<{col_widths['Polars Type']}} | "
-            f"{is_nullable_str:<{col_widths['Nullable']}} | "
-            f"{value_range_str:<{col_widths['Value Range']}} | "
-            f"{col_schema.sql_type:<{col_widths['Optimal SQL Type']}}"
-        )
-        table_str += row_line + "\n"
-    return table_str
+def read_csv_content(csv_path: str) -> str:
+    content = open(csv_path, encoding="cp1252").read()
+    content = content.replace('\\"', '""').strip()
+    return content
 
 
-def generate_sql_create_table_ddl(
-    schema_records: List[ColumnSchema],
-    table_name: str,
-    primary_key_sql_name: Optional[str] = None,
-) -> str:
-    """
-    Generates a PostgreSQL CREATE TABLE DDL statement from a list of ColumnSchema records.
-    Args:
-        schema_records (List[ColumnSchema]): A list of dataclass instances representing the inferred schema.
-    table_name (str): The desired name for the SQL table.
-        primary_key_sql_name (Optional[str]): The `sql_name` of the column to set as PRIMARY KEY.
-    If None, no primary key constraint is added.
-
-    Returns:
-        str: The complete PostgreSQL CREATE TABLE DDL statement.
-    """
-    if not schema_records:
-        return f"CREATE TABLE {table_name} (); -- No columns inferred from schema."
-
-    column_definitions = []
-    existing_sql_names = {col.sql_name for col in schema_records}
-    for col_schema in schema_records:
-        column_definitions.append(f'    "{col_schema.sql_name}" {col_schema.sql_type}')
-
-    if primary_key_sql_name:
-        if primary_key_sql_name in existing_sql_names:
-            column_definitions.append(f'    PRIMARY KEY ("{primary_key_sql_name}")')
-        else:
-            _logger.warning(
-                f"Primary key column '{primary_key_sql_name}' not found in inferred SQL names."
-            )
-
-    ddl_statement = f'CREATE TABLE "{table_name}" (\n'
-    ddl_statement += ",\n".join(column_definitions)
-    ddl_statement += "\n);\n\n"
-
-    for col_name in existing_sql_names:
-        if col_name in indexed_columns:
-            index_name = f"idx_{table_name}_{col_name}"
-            ddl_statement += f'CREATE INDEX "{index_name}" ON "{table_name}" ("{col_name}");\n'
-
-    return ddl_statement
-
-
-@click.command()
-@click.argument(
-    "csv_path", type=click.Path(exists=True, dir_okay=False, readable=True)
+@click.group()
+@click.option(
+    "--config", "-C",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+    help="Path to a global configuration file.",
 )
 @click.option(
-    "--primary-key", help="SQL column name (cleaned) to set as PRIMARY KEY."
+    "--verbose", "-v", is_flag=True, help="Enable verbose output for debugging."
 )
-def cli(csv_path: str, primary_key: Optional[str]):
-    import coloredlogs
+def cli(verbose, config):
+    """
+    A versatile CLI tool with subcommands.
 
+    Global options apply to all subcommands.
+    """
+    import coloredlogs
     coloredlogs.install(level="INFO")
 
+    click.echo(f"Global Verbose mode: {'ON' if verbose else 'OFF'}")
+    if config:
+        click.echo(f"Using global config: {config}")
+
+    # You could store config/verbose in ctx.obj if desired for more complex shared state
+    # click.get_current_context().obj = {'verbose': verbose, 'config': config}
+
+
+@cli.command("generate-schema")
+@click.argument("csv_path", type=click.Path(exists=True, dir_okay=False, readable=True))
+def generate_schema(csv_path: str):
     try:
-        csv_content = open(csv_path).read().replace('\\"', '""').strip()
+        csv_content = read_csv_content(csv_path)
         df = pl.read_csv(
-            StringIO(csv_content), has_header=True, separator=",", infer_schema_length=1000,
-            encoding="cp1252"
+            StringIO(csv_content),
+            has_header=True,
+            separator=",",
+            infer_schema_length=1000,
         )
     except Exception as e:
         raise RuntimeError(f"Error reading CSV file '{csv_path}': {e}")
@@ -165,17 +66,33 @@ def cli(csv_path: str, primary_key: Optional[str]):
     table_name = Path(csv_path).stem
     table_name = clean_for_sql_name(table_name)
     table_name = re.sub(r"_\d{8}$", r"", table_name)
-    schema = infer_schema(df)
 
+    schema = infer_schema(df)
     table = schema_as_table(schema)
     table = re.sub(r"^(?=.)", "-- ", table, flags=re.MULTILINE)
 
     print(
         f"-- Schema inferred from {csv_path}\n"
-        + table + "\n" + 
-        generate_sql_create_table_ddl(
-            schema, table_name, primary_key_sql_name=primary_key
-        ))
+        + table
+        + "\n"
+        + generate_sql_create_table_ddl(
+            schema,
+            table_name,
+        )
+    )
+
+@cli.command("generate-copy")
+@click.argument("csv_path", type=click.Path(exists=True, dir_okay=False, readable=True))
+def generate_copy(csv_path: str):
+    try:
+        csv_content = read_csv_content(csv_path)
+    except Exception as e:
+        raise RuntimeError(f"Error reading CSV file '{csv_path}': {e}")
+
+    table_name = Path(csv_path).stem
+    table_name = clean_for_sql_name(table_name)
+    table_name = re.sub(r"_\d{8}$", r"", table_name)
+
     print(f"COPY {table_name} from STDIN with (format csv, header true);")
     print(csv_content)
     print("\.")
