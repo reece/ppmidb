@@ -1,5 +1,7 @@
 __pycache__
 .DS_Store
-*.bak
-data
 .vscode
+*.bak
+*.err
+*.log
+data

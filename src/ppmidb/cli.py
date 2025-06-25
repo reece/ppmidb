@@ -59,10 +59,14 @@ def generate_schema(csv_path: str):
             StringIO(csv_content),
             has_header=True,
             separator=",",
-            infer_schema_length=1000,
+            infer_schema_length=None,
         )
     except Exception as e:
-        raise RuntimeError(f"Error reading CSV file '{csv_path}': {e}")
+        header = next(StringIO(csv_content)).strip()
+        debug_info = f"""
+        {csv_path=}
+        {len(header)=}"""
+        raise RuntimeError(f"Error reading CSV file '{csv_path}': {e}" + "\n" + debug_info)
 
     schema = infer_schema(df)
     table = schema_as_table(schema)
