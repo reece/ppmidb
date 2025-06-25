@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ppmidb = "ppmidb.schema_inference.cli:cli"
+ppmidb = "ppmidb.cli:cli"
 
 [build-system]
 requires = ["hatchling"]
