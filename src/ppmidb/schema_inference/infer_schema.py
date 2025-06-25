@@ -103,8 +103,6 @@ def get_optimal_sql_type(column_schema: ColumnSchema) -> str:
     elif base_polars_type == pl.Time:
         sql_type_base = "TIME"
     elif base_polars_type == pl.Decimal:
-        # If precision/scale are available, use them.
-        # Otherwise, a generic NUMERIC.
         if hasattr(polars_type, "precision") and hasattr(polars_type, "scale"):
             precision = (
                 polars_type.precision if polars_type.precision is not None else 38
@@ -114,9 +112,9 @@ def get_optimal_sql_type(column_schema: ColumnSchema) -> str:
         else:
             sql_type_base = "NUMERIC"
     elif base_polars_type == pl.List:
-        sql_type_base = "JSONB"  # Flexible for lists of varying types/structures
+        sql_type_base = "JSONB"
     elif base_polars_type == pl.Struct:
-        sql_type_base = "JSONB"  # Flexible for structured data
+        sql_type_base = "JSONB"
 
     # Add nullability constraint
     null_constraint = "NULL" if is_nullable else "NOT NULL"
@@ -133,10 +131,7 @@ def infer_schema(df: pl.DataFrame) -> List[ColumnSchema]:
     inferred_schema: List[ColumnSchema] = []
 
     for csv_col_name, polars_dtype in df.schema.items():
-        # Infer nullability
         is_nullable = df[csv_col_name].is_null().any()
-
-        # Determine numeric range
         value_range: Optional[Tuple[Union[int, float], Union[int, float]]] = None
         if polars_dtype.is_numeric():
             min_val = df[csv_col_name].min()
@@ -144,11 +139,9 @@ def infer_schema(df: pl.DataFrame) -> List[ColumnSchema]:
             if min_val is not None and max_val is not None:
                 value_range = (min_val, max_val)
 
-        # Create a preliminary ColumnSchema object to pass to get_optimal_sql_type
-        # We'll populate sql_type in the next step
         temp_col_schema = ColumnSchema(
             csv_name=csv_col_name,
-            sql_name=clean_for_sql_name(csv_col_name),  # Populate sql_name here
+            sql_name=clean_for_sql_name(csv_col_name),
             polars_type=polars_dtype,
             is_nullable=is_nullable,
             value_range=value_range,

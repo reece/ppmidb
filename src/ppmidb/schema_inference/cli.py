@@ -2,6 +2,7 @@
 
 """infer schema from provided csv file"""
 
+from io import StringIO
 import logging
 from pathlib import Path
 import re
@@ -12,7 +13,6 @@ import polars as pl
 
 from .infer_schema import infer_schema, ColumnSchema, clean_for_sql_name
 
-# columns that are always indexed
 indexed_columns = [
     "patno"
 ]
@@ -154,8 +154,10 @@ def cli(csv_path: str, primary_key: Optional[str]):
     coloredlogs.install(level="INFO")
 
     try:
+        csv_content = open(csv_path).read().replace('\\"', '""').strip()
         df = pl.read_csv(
-            csv_path, has_header=True, separator=",", infer_schema_length=1000
+            StringIO(csv_content), has_header=True, separator=",", infer_schema_length=1000,
+            encoding="cp1252"
         )
     except Exception as e:
         raise RuntimeError(f"Error reading CSV file '{csv_path}': {e}")
@@ -166,15 +168,17 @@ def cli(csv_path: str, primary_key: Optional[str]):
     schema = infer_schema(df)
 
     table = schema_as_table(schema)
-    table = re.sub(r"^.", "-- ", table, flags=re.MULTILINE)
+    table = re.sub(r"^(?=.)", "-- ", table, flags=re.MULTILINE)
 
     print(
         f"-- Schema inferred from {csv_path}\n"
         + table + "\n" + 
         generate_sql_create_table_ddl(
             schema, table_name, primary_key_sql_name=primary_key
-        )
-    )
+        ))
+    print(f"COPY {table_name} from STDIN with (format csv, header true);")
+    print(csv_content)
+    print("\.")
 
 
 if __name__ == "__main__":

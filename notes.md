@@ -18,3 +18,6 @@
  ('HRSTND', 'BIGINT', 'YES', None, None, None),
  ('ORIG_ENTRY', 'VARCHAR', 'YES', None, None, None),
  ('LAST_UPDATE', 'TIMESTAMP', 'YES', None, None, None)]
+
+# convert csv files from cp1252 to utf-8
+for f in *.csv; do iconv -c -f cp1252 -t utf-8 <$f >|xxx && mv -f xxx $f; done
