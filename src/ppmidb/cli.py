@@ -39,10 +39,7 @@ def _file_arguments(f):
     "--verbose", "-v", count=True, help="Enable verbose output for debugging."
 )
 def cli(verbose):
-    """
-    A versatile CLI tool with subcommands.
-
-    Global options apply to all subcommands.
+    """Parse PPMI CSV files to generate schema (DDL), database loading (DML), or directly load into PostgreSQL
     """
     import coloredlogs
 
@@ -54,9 +51,10 @@ def cli(verbose):
     click.get_current_context().obj = {'verbose': verbose}
 
 
-@cli.command("generate-schema")
+@cli.command("generate-ddl")
 @_file_arguments
-def generate_schema(file_paths: list[str], zip_file: Optional[Path]):
+def generate_ddl(file_paths: list[str], zip_file: Optional[Path]):
+    """Infer schema from CSV data and output DDL (CREATE TABLE and selected indexes)"""
     for csv_path, csv_content in file_generator(file_paths=file_paths, zip_file=zip_file):
         table_name = Path(csv_path).stem
         table_name = clean_for_sql_name(table_name)
@@ -104,9 +102,9 @@ def generate_copy(file_paths: list[str], zip_file: Optional[Path]):
 
 
 @cli.command("load-csv")
-@click.argument("csv_path", type=click.Path(exists=True, dir_okay=False, readable=True))
 @click.option("--uri", type=str, required=True)
-def load_csv(uri: str, csv_path: str):
+@_file_arguments
+def load_csv(uri: str, file_paths: list[str], zip_file: Optional[Path]):
     import psycopg
 
     con = psycopg.connect(uri)
