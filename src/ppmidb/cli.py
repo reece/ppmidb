@@ -24,16 +24,6 @@ _logger = logging.getLogger()
 
 
 
-def _file_arguments(f):
-    """decorator containing common file argument/option decorations"""
-    @click.argument('file_paths', nargs=-1, type=str)
-    @click.option('--zip-file', "-z", type=click.Path(exists=True), default=None,
-                  help='Optional zip file containing additional data.')
-    def wrapper(*args, **kwargs):
-        return f(*args, **kwargs)
-    return wrapper
-
-
 @click.group()
 @click.option(
     "--verbose", "-v", count=True, help="Enable verbose output for debugging."
@@ -52,9 +42,13 @@ def cli(verbose):
 
 
 @cli.command("generate-ddl")
-@_file_arguments
+@click.argument('file_paths', nargs=-1, type=str)
+@click.option('--zip-file', "-z", type=click.Path(exists=True), default=None,
+                help='Optional zip file containing additional data.')
 def generate_ddl(file_paths: list[str], zip_file: Optional[Path]):
-    """Infer schema from CSV data and output DDL (CREATE TABLE and selected indexes)"""
+    """Infer schema from CSV data and output DDL (CREATE TABLE and selected indexes)
+    
+    """
     for csv_path, csv_content in file_generator(file_paths=file_paths, zip_file=zip_file):
         table_name = Path(csv_path).stem
         table_name = clean_for_sql_name(table_name)
@@ -89,9 +83,12 @@ def generate_ddl(file_paths: list[str], zip_file: Optional[Path]):
         )
 
 
-@cli.command("generate-copy")
-@_file_arguments
-def generate_copy(file_paths: list[str], zip_file: Optional[Path]):
+@cli.command("generate-dml")
+@click.argument('file_paths', nargs=-1, type=str)
+@click.option('--zip-file', "-z", type=click.Path(exists=True), default=None,
+                help='Optional zip file containing additional data.')
+def generate_dml(file_paths: list[str], zip_file: Optional[Path]):
+    """Generate DML as COPY with inline data to load database"""
     for csv_path, csv_content in file_generator(file_paths=file_paths, zip_file=zip_file):
         table_name = Path(csv_path).stem
         table_name = clean_for_sql_name(table_name)
@@ -101,68 +98,26 @@ def generate_copy(file_paths: list[str], zip_file: Optional[Path]):
         print("\\.")
 
 
-@cli.command("load-csv")
-@click.option("--uri", type=str, required=True)
-@_file_arguments
-def load_csv(uri: str, file_paths: list[str], zip_file: Optional[Path]):
-    import psycopg
-
-    con = psycopg.connect(uri)
-    cur = con.cursor()
-
-    table_name = Path(csv_path).stem
-    table_name = clean_for_sql_name(table_name)
-    table_name = re.sub(r"_\d{8}$", r"", table_name)
-
-    csv_content = BROKEN_read_csv_content(csv_path)
-
-    csv_rdr = csv.reader(StringIO(csv_content))
-    header = next(csv_rdr)
-    query = f"COPY {table_name} ({','.join(header)}) from STDIN"
-    query += " WITH (FORMAT CSV, HEADER)"
-
-    try:
-        with cur.copy(query) as copy:
-            copy.write(csv_content)
-        con.commit()
-    except Exception as e:
-        con.cancel()
-        header = next(StringIO(csv_content)).strip()
-        debug_info = f"""
-        {csv_path=}
-        {len(header)=}"""
-        if len(header) == 1024:
-            debug_info += "\nThe header appears to be truncated and the file is likely corrupt"
-        raise RuntimeError(f"Error reading CSV file '{csv_path}': {e}" + "\n" + debug_info)
-
-
-@cli.command("load-zip")
+@cli.command("load")
 @click.option("--uri", type=str, required=True)
 @click.option("--create-table", "-t", is_flag=True)
-def load_zip(uri: str, zipfile_path: str, files: list, create_table: bool):
+@click.argument('file_paths', nargs=-1, type=str)
+@click.option('--zip-file', "-z", type=click.Path(exists=True), default=None,
+                help='Optional zip file containing additional data.')
+def load(uri: str, zip_file: str, file_paths: list, create_table: bool):
     """Load zipfile specified by ZIPFILE_PATH into database specified by --uri.  By default, all *.csv files
     in the zipfile are loaded. FILES, if specified,
     is used to filter data to be loaded."""
     import psycopg
     from zipfile import ZipFile
 
-    file_set = set(files)
-
     con = psycopg.connect(uri)
 
     errors = []
-    zf = ZipFile(zip_path)
-    for zi in zf.filelist:
-        csv_path = zi.filename
-        if file_set and csv_path not in file_set:
-            _logger.debug(f"{csv_path}: Not in requested files")
-            continue
-
+    for csv_path, csv_content in file_generator(file_paths=file_paths, zip_file=zip_file):
         table_name = Path(csv_path).stem
         table_name = clean_for_sql_name(table_name)
         table_name = re.sub(r"_\d{8}$", r"", table_name)
-
-        csv_content = fix_csv_content(csv_path, zf.read(zi).decode(PPMI_CSV_ENCODING))
 
         if create_table:
             try:
@@ -210,7 +165,6 @@ def load_zip(uri: str, zipfile_path: str, files: list, create_table: bool):
     if errors:
         _logger.critical("\n. ".join([f"{len(errors)} errors:"] + errors))
         return 1
-
 
 
 def file_generator(file_paths: List[str], zip_file: Optional[Path]) -> Generator[Tuple[str, str]]:
