@@ -93,7 +93,10 @@ def generate_dml(file_paths: list[str], zip_file: Optional[Path]):
         table_name = Path(csv_path).stem
         table_name = clean_for_sql_name(table_name)
         table_name = re.sub(r"_\d{8}$", r"", table_name)
-        print(f"COPY {table_name} from STDIN with (format csv, header true);")
+
+        header = next(csv.reader(StringIO(csv_content)))
+        columns = ','.join(map(lambda s: f'"{clean_for_sql_name(s)}"', header))
+        print(f"COPY {table_name} ({columns}) from STDIN with (format csv, header true);")
         print(csv_content)
         print("\\.")
 
@@ -143,7 +146,8 @@ def load(uri: str, zip_file: str, file_paths: list, create_table: bool):
 
         csv_rdr = csv.reader(StringIO(csv_content))
         header = next(csv_rdr)
-        query = f"COPY {table_name} ({','.join(header)}) from STDIN"
+        columns = ','.join(map(lambda s: f'"{clean_for_sql_name(s)}"', header))
+        query = f"COPY {table_name} ({columns.lower()}) from STDIN"
         query += " WITH (FORMAT CSV, HEADER)"
 
         try:
