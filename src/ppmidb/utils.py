@@ -119,13 +119,13 @@ def generate_sql_create_table_ddl(
                 f"Primary key column '{primary_key_sql_name}' not found in inferred SQL names."
             )
 
-    ddl_statement = f'CREATE TABLE "{table_name}" (\n'
+    ddl_statement = f'CREATE TABLE IF NOT EXISTS "{table_name}" (\n'
     ddl_statement += ",\n".join(column_definitions)
     ddl_statement += "\n);\n\n"
 
     for col_name in existing_sql_names:
         if col_name in indexed_columns:
             index_name = f"idx_{table_name}_{col_name}"
-            ddl_statement += f'CREATE INDEX "{index_name}" ON "{table_name}" ("{col_name}");\n'
+            ddl_statement += f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{table_name}" ("{col_name}");\n'
 
     return ddl_statement
