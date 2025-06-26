@@ -92,16 +92,15 @@ def generate_schema(file_paths: list[str], zip_file: Optional[Path]):
 
 
 @cli.command("generate-copy")
-@click.argument("csv_path", type=click.Path(exists=True, dir_okay=False, readable=True))
-def generate_copy(csv_path: str):
-    csv_content = BROKEN_read_csv_content(csv_path)
-    table_name = Path(csv_path).stem
-    table_name = clean_for_sql_name(table_name)
-    table_name = re.sub(r"_\d{8}$", r"", table_name)
-
-    print(f"COPY {table_name} from STDIN with (format csv, header true);")
-    print(csv_content)
-    print("\\.")
+@_file_arguments
+def generate_copy(file_paths: list[str], zip_file: Optional[Path]):
+    for csv_path, csv_content in file_generator(file_paths=file_paths, zip_file=zip_file):
+        table_name = Path(csv_path).stem
+        table_name = clean_for_sql_name(table_name)
+        table_name = re.sub(r"_\d{8}$", r"", table_name)
+        print(f"COPY {table_name} from STDIN with (format csv, header true);")
+        print(csv_content)
+        print("\\.")
 
 
 @cli.command("load-csv")
