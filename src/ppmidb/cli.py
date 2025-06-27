@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 
-"""process PPMI zip file and standalone csv files"""
+"""process PPMI zip file and standalone csv files
+
+ppmidb -v load -t --uri postgresql://localhost/ppmidb -z data/PPMI_20250401.gz
+
+Or, load to Cloud SQL:
+
+export PGPASSWORD=PG#4Zz...
+
+"""
 
 
 import csv

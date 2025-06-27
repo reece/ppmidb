@@ -21,3 +21,23 @@
 
 # convert csv files from cp1252 to utf-8
 for f in *.csv; do iconv -c -f cp1252 -t utf-8 <$f >|xxx && mv -f xxx $f; done
+
+
+
+
+gcloud alpha bigquery data-transfer create \
+    --data-source=postgresql \
+    --display-name="PPMI DTS 20250401b" \
+    --target-dataset="20250401b" \
+    --params='{
+        "authentication.username": "postgres",
+        "authentication.password": "hello2Erin",
+        "database": "ppmidb",
+        "endpoint.host": "ppmi-test:us-central1:reece-test",
+        "endpoint.port": "5432",
+        "schema": "public",
+        "assets": "vital_signs",
+        "sslMode": "DISABLE"
+    }' \
+    --service-account="service-100073959555@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com" \
+    --location="us-central1" 
