@@ -119,60 +119,100 @@ def load(uri: str, zip_file: str, file_paths: list, create_table: bool):
     """Load zipfile specified by ZIPFILE_PATH into database specified by --uri.  By default, all *.csv files
     in the zipfile are loaded. FILES, if specified,
     is used to filter data to be loaded."""
-    import psycopg
-    from zipfile import ZipFile
-
-    con = psycopg.connect(uri)
-
     errors = []
-    for csv_path, csv_content in file_generator(file_paths=file_paths, zip_file=zip_file):
-        table_name = Path(csv_path).stem
-        table_name = clean_for_sql_name(table_name)
-        table_name = re.sub(r"_\d{8}$", r"", table_name)
 
-        if create_table:
+    if uri.startswith("postgresql://"):
+        import psycopg
+        con = psycopg.connect(uri)
+
+        for csv_path, csv_content in file_generator(file_paths=file_paths, zip_file=zip_file):
+            table_name = Path(csv_path).stem
+            table_name = clean_for_sql_name(table_name)
+            table_name = re.sub(r"_\d{8}$", r"", table_name)
+
+            if create_table:
+                try:
+                    df = pl.read_csv(
+                        StringIO(csv_content),
+                        has_header=True,
+                        separator=",",
+                        infer_schema_length=None,
+                    )
+                except Exception as e:
+                    header = next(StringIO(csv_content)).strip()
+                    debug_info = f"""
+                    {csv_path=}
+                    {len(header)=}"""
+                    _logger.warning(f"Error reading CSV file '{csv_path}': {e}" + "\n" + debug_info)
+                    errors.append(table_name + " (" + str(e) + ")")
+                    continue
+                schema = infer_schema(df)
+                schema_ddl = generate_sql_create_table_ddl(schema, table_name)
+                with con.cursor() as cur:
+                    cur.execute(schema_ddl.encode())
+                    con.commit()
+
+            csv_rdr = csv.reader(StringIO(csv_content))
+            header = next(csv_rdr)
+            columns = ','.join(map(lambda s: f'"{clean_for_sql_name(s)}"', header))
+            query = f"COPY {table_name} ({columns.lower()}) from STDIN"
+            query += " WITH (FORMAT CSV, HEADER)"
+
             try:
-                df = pl.read_csv(
-                    StringIO(csv_content),
-                    has_header=True,
-                    separator=",",
-                    infer_schema_length=None,
-                )
+                with con.cursor().copy(query.encode()) as copy:
+                    copy.write(csv_content)
+                con.commit()
+                _logger.info(f"{table_name}: Loaded and committed")
             except Exception as e:
+                con.cancel()
                 header = next(StringIO(csv_content)).strip()
                 debug_info = f"""
                 {csv_path=}
                 {len(header)=}"""
-                _logger.warning(f"Error reading CSV file '{csv_path}': {e}" + "\n" + debug_info)
+                if len(header) == 1024:
+                    debug_info += "\nThe header appears to be truncated and the file is likely corrupt"
+                _logger.error(f"Error loading '{csv_path}': {e}" + "\n" + debug_info)
                 errors.append(table_name + " (" + str(e) + ")")
-                continue
-            schema = infer_schema(df)
-            schema_ddl = generate_sql_create_table_ddl(schema, table_name)
-            with con.cursor() as cur:
-                cur.execute(schema_ddl.encode())
-                con.commit()
-
-        csv_rdr = csv.reader(StringIO(csv_content))
-        header = next(csv_rdr)
-        columns = ','.join(map(lambda s: f'"{clean_for_sql_name(s)}"', header))
-        query = f"COPY {table_name} ({columns.lower()}) from STDIN"
-        query += " WITH (FORMAT CSV, HEADER)"
-
+    elif uri.startswith("bigquery://"):
+        from google.cloud import bigquery
+        # Extract project and dataset from the URI
+        # Assuming the format bigquery://project_id/dataset_id
         try:
-            with con.cursor().copy(query.encode()) as copy:
-                copy.write(csv_content)
-            con.commit()
-            _logger.info(f"{table_name}: Loaded and committed")
-        except Exception as e:
-            con.cancel()
-            header = next(StringIO(csv_content)).strip()
-            debug_info = f"""
-            {csv_path=}
-            {len(header)=}"""
-            if len(header) == 1024:
-                debug_info += "\nThe header appears to be truncated and the file is likely corrupt"
-            _logger.error(f"Error loading '{csv_path}': {e}" + "\n" + debug_info)
-            errors.append(table_name + " (" + str(e) + ")")
+            # Split off "bigquery://"
+            bq_path = uri[len("bigquery://"):]
+            project_id, dataset_id = bq_path.split("/")
+        except ValueError:
+            _logger.critical(f"Invalid BigQuery URI format: {uri}. Expected bigquery://project_id/dataset_id")
+            return 1
+
+        client = bigquery.Client(project=project_id)
+        
+        for csv_path, csv_content in file_generator(file_paths=file_paths, zip_file=zip_file):
+            table_name = Path(csv_path).stem
+            table_name = clean_for_sql_name(table_name)
+            table_name = re.sub(r"_\d{8}$", r"", table_name)
+
+            table_id = f"{project_id}.{dataset_id}.{table_name}"
+            job_config = bigquery.LoadJobConfig(
+                source_format=bigquery.SourceFormat.CSV,
+                skip_leading_rows=1, # Assuming header is always present
+                autodetect=True, # Autodetect schema
+            )
+
+            try:
+                # BigQuery client expects bytes-like object or a file-like object
+                # We need to re-read the string content as bytes for the load job
+                csv_file_obj = StringIO(csv_content)
+                job = client.load_table_from_file(csv_file_obj, table_id, job_config=job_config)
+                job.result() # Waits for the job to complete
+                _logger.info(f"{table_name}: Loaded into BigQuery table {table_id}")
+            except Exception as e:
+                _logger.error(f"Error loading '{csv_path}' into BigQuery: {e}")
+                errors.append(table_name + " (" + str(e) + ")")
+
+    else:
+        _logger.critical(f"Unsupported database URI scheme: {uri}")
+        return 1
         
     if errors:
         _logger.critical("\n. ".join([f"{len(errors)} errors:"] + errors))

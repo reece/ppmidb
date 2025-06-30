@@ -4,4 +4,6 @@ __pycache__
 *.bak
 *.err
 *.log
+archive
 data
+env

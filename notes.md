@@ -40,4 +40,16 @@ gcloud alpha bigquery data-transfer create \
         "sslMode": "DISABLE"
     }' \
     --service-account="service-100073959555@gcp-sa-bigquerydatatransfer.iam.gserviceaccount.com" \
-    --location="us-central1" 
+    --location="us-central1" #!/bin/bash -x
+
+exec bq mk \
+    --transfer_config \
+    --target_dataset=PPMI_20250401D \
+    --data_source=postgresql \
+    --display_name="$(date)" \
+    --params='{"assets":["ppmidb/public/visit_type", "vital_signs"], 
+        "connector.authentication.username": "postgres", 
+        "connector.authentication.password":"'"${PGPASSWORD}"'", 
+        "connector.database":"ppmidb", 
+        "connector.endpoint.host":"10.58.64.3", 
+        "connector.endpoint.port":5432}'
