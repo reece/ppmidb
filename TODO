@@ -1,0 +1,4 @@
+- drop the _harmonized tables
+- create table and column comments from data_dictionary_annotated
+- set blanks to null in dda
+- create views
